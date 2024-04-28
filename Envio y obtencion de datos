@@ -1,0 +1,74 @@
+#include <stm32f401xe.h>
+#include <stdio.h>
+#include <string.h>
+
+#define LED_PIN     5   // Pin del LED conectado al PA5
+#define USART_BAUD  9600
+
+// Función para generar un retardo en milisegundos
+void delay(int milliseconds) {
+    for (int i = 0; i < milliseconds * 1000; ++i) {}
+}
+
+// Función para enviar texto por USART6
+void sendText(const double* t) {
+    int len = strlen(t);
+    for (int i = 0; i < len; i++) {
+        while (!(USART6->SR & USART_SR_TXE)); // Espera a puerto disponible
+        USART6->DR = t[i]; // Envia dato
+    }
+}
+
+// Manejador de interrupción para USART6
+void USART6_IRQHandler(void) {
+    if (USART6->SR & USART_SR_RXNE) {
+        char received_char = USART6->DR; // Leer el dato recibido
+
+        // Verificar y procesar el comando recibido desde el celular
+        if (received_char == 'e') {
+            // Esperar por el siguiente caracter ('n' para encender el LED)
+            while (!(USART6->SR & USART_SR_RXNE));
+            received_char = USART6->DR;
+            if (received_char == 'n') {
+                // Enciende el LED (pin PA5) por 3 segundos
+                GPIOA->BSRR |= (1 << LED_PIN); // Enciende el LED (pin PA5)
+                delay(3000); // Espera 3 segundos
+                GPIOA->BSRR |= (1 << (LED_PIN + 16)); // Apaga el LED (pin PA5)
+            }
+        }
+    }
+}
+
+int main(void) {
+    SystemCoreClockUpdate();
+
+    // Configurar GPIO para el LED (pin PA5)
+    RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN;
+    GPIOA->MODER |= (1 << (2 * LED_PIN)); // Configurar como salida
+
+    // Configuración USART6 para Bluetooth
+    RCC->APB2ENR |= RCC_APB2ENR_USART6EN;
+    GPIOA->MODER |= (2UL << GPIO_MODER_MODER11_Pos) | (2UL << GPIO_MODER_MODER12_Pos);  // Configurar PA11 y PA12 como modo de función alternativa
+    GPIOA->AFR[1] |= (8UL << GPIO_AFRH_AFSEL11_Pos) | (8UL << GPIO_AFRH_AFSEL12_Pos);    // Selección de la función alternativa AF8 para USART6 en PA11 y PA12
+    USART6->BRR = (unsigned int)(16000000 / USART_BAUD);
+    USART6->CR1 |= USART_CR1_TE | USART_CR1_RE | USART_CR1_UE;
+    USART6->CR1 |= USART_CR1_RXNEIE; // Habilitar interrupción de recepción USART
+
+    // Configuración de interrupción NVIC para USART6
+    NVIC_SetPriority(USART6_IRQn, 0);
+    NVIC_EnableIRQ(USART6_IRQn);
+
+    while (1) {
+        // Verificar si se presiona el pulsador (pin PA0)
+        if (!(GPIOA->IDR & GPIO_IDR_ID0)) {
+            // Enviar el número "1804176" por USART6 (Bluetooth)
+            sendText("1804176\r\n");
+            // Esperar hasta que se libere el pulsador
+            while (!(GPIOA->IDR & GPIO_IDR_ID0));
+            // Espera un poco para evitar rebotes
+            delay(100);
+        }
+    }
+
+    return 0;
+}
